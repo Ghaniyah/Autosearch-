@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Search, X, Loader2, AlertCircle, Clock, ArrowUp, ArrowDown, 
-  CornerDownLeft, Check, Terminal, BookOpen, Code2, Sparkles, 
+  CornerDownLeft, Terminal, BookOpen, Code2, Sparkles,
   Settings2, RefreshCw, Layers, ShieldCheck, Zap
 } from 'lucide-react';
 
@@ -110,6 +110,7 @@ export default function App() {
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const requestIdRef = useRef(0);
   const listboxId = 'autocomplete-listbox';
 
   // Click outside to close dropdown
@@ -133,7 +134,7 @@ export default function App() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    const currentRequestId = Date.now();
+    const currentRequestId = ++requestIdRef.current;
     setActiveRequestId(currentRequestId);
 
     setIsLoading(true);
@@ -147,23 +148,21 @@ export default function App() {
         controller.signal
       );
 
-      // Stale Response Handling: Ensure this is still the latest request
-      if (currentRequestId === activeRequestId || controller.signal.aborted === false) {
+      if (currentRequestId === requestIdRef.current && !controller.signal.aborted) {
         setSuggestions(response.results);
         setLastQueryTime(response.queryTime);
         setIsLoading(false);
         setIsOpen(true);
       }
-    } catch (err: any) {
-      if (err.name === 'AbortError' || err.code === 20) {
-        // Request was aborted intentionally, do not update error state
+    } catch (err: unknown) {
+      if (controller.signal.aborted || currentRequestId !== requestIdRef.current) {
         return;
       }
-      setError(err.message || 'An unexpected error occurred.');
+      setError(err instanceof Error ? err.message : 'An unexpected error occurred.');
       setIsLoading(false);
       setSuggestions([]);
     }
-  }, [simulatedLatency, simulatedErrorRate, activeRequestId]);
+  }, [simulatedLatency, simulatedErrorRate]);
 
   // Debounced Search Effect
   useEffect(() => {
@@ -171,7 +170,10 @@ export default function App() {
       performSearch(query);
     }, debounceDelay);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      abortControllerRef.current?.abort();
+    };
   }, [query, debounceDelay, performSearch]);
 
   // Handle Input Change
@@ -480,7 +482,7 @@ export default function App() {
                                 key={idx}
                                 onClick={() => {
                                   setQuery(historyItem);
-                                  performSearch(historyItem);
+                                  setIsOpen(true);
                                 }}
                                 className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1.5"
                               >
@@ -747,7 +749,7 @@ export function AutocompleteSearch() {
                   1. Stale-Response & Race Condition Prevention
                 </h3>
                 <p className="text-slate-400 leading-relaxed">
-                  When typing rapidly, network responses can arrive out of order (e.g., request for "Re" resolves after request for "React"). We prevent this by utilizing the browser native <code className="text-indigo-400 font-mono">AbortController</code> API to cancel pending fetch requests whenever a new input event is registered, alongside request ID timestamp validation.
+                  When typing rapidly, network responses can arrive out of order (e.g., request for "Re" resolves after request for "React"). We prevent this by utilizing the browser native <code className="text-indigo-400 font-mono">AbortController</code> API to cancel pending requests whenever a new input event is registered, alongside monotonically increasing request ID validation.
                 </p>
               </div>
 
